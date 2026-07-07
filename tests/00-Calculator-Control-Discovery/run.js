@@ -2,25 +2,29 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// DISCOVERY v2 — locate WHERE Calculator's controls live.
-// v1 found zero controls under a window matching "Calculator", which means the
-// buttons aren't reachable as descendants of that top-level window (common on
-// Win11: calc.exe launches CalculatorApp.exe; the UIA tree can sit elsewhere).
+// DISCOVERY v3 — this is the CLASSIC Win32 Calculator (window class 'CalcFrame').
+// Its buttons are Win32 controls with numeric control IDs (autoId is a number
+// like '122'), NOT UWP AutomationId strings. v2 confirmed: class='Button',
+// name='', autoId='122'.
 //
-// This version tests several hypotheses so we learn the real structure:
-//   A) Are the buttons reachable from the DESKTOP ROOT (windowTitle = null)?
-//   B) Does a different window title ("Calculator" exact vs substring) help?
-//   C) Can we at least find ANY named container (e.g. the app frame)?
+// Classic CalcFrame control IDs are well-known and stable. This test confirms
+// the specific IDs we need by targeting each by controlId and reading it back.
+//   Digits 0-9  -> 129..138  (0=129, 1=130, ... 7=136, 8=137, 9=138)
+//   Plus (+)    -> 93
+//   Equals (=)  -> 121
+//   Display     -> 150
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
-  async function probe(windowTitle, locator, label) {
+  const WIN = "Calculator";
+
+  async function probe(locator, label) {
     try {
-      const c = await driver.findControl(windowTitle, locator);
+      const c = await driver.findControl(WIN, locator);
       log(`HIT   ${label} -> name='${c.name}' class='${c.className}' autoId='${c.automationId}'`);
       return c;
     } catch (e) {
-      log(`miss  ${label}  (${(e && e.message || "").slice(0, 60)})`);
+      log(`miss  ${label}  (${(e && e.message || "").slice(0, 50)})`);
       return null;
     }
   }
@@ -29,47 +33,33 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     log("Launching Calculator...");
     await driver.launch("calc.exe");
     await driver.pause(3000);
-    await driver.focusWindow("Calculator");
-    const title = await driver.getWindowTitle();
-    log("Focused window title reported as: '" + title + "'\n");
+    await driver.focusWindow(WIN);
+    log("Focused. Confirming classic CalcFrame control IDs...\n");
 
-    // --- Hypothesis A: search from the DESKTOP ROOT (windowTitle = null) ---
-    log("=== A) From desktop root (windowTitle = null) ===");
-    await probe(null, { name: "Seven" }, "root name='Seven'");
-    await probe(null, { name: "Five" }, "root name='Five'");
-    await probe(null, { controlId: "num7Button" }, "root autoId='num7Button'");
-    // The Calculator app frame / results are often findable from root:
-    await probe(null, { name: "Calculator" }, "root name='Calculator'");
-    await probe(null, { className: "ApplicationFrameWindow" }, "root class='ApplicationFrameWindow'");
-    await probe(null, { className: "Windows.UI.Core.CoreWindow" }, "root class='CoreWindow'");
+    // The controls we actually need for 7 + 6 = 13:
+    log("=== Buttons we need ===");
+    await probe({ controlId: "136" }, "digit 7  (id 136)");
+    await probe({ controlId: "135" }, "digit 6  (id 135)");
+    await probe({ controlId: "93"  }, "plus +   (id 93)");
+    await probe({ controlId: "121" }, "equals = (id 121)");
 
-    // --- Hypothesis B: exact reported title instead of substring "Calculator" ---
-    log("\n=== B) Using the exact reported window title ===");
-    if (title && title.trim()) {
-      await probe(title, { name: "Seven" }, `title='${title}' name='Seven'`);
-      await probe(title, { name: "Five" }, `title='${title}' name='Five'`);
-      await probe(title, { className: "Button" }, `title='${title}' class='Button'`);
-    } else {
-      log("(no usable window title reported; skipping)");
+    log("\n=== Display / result field ===");
+    await probe({ controlId: "150" }, "display  (id 150)");
+    // Some builds use 158 or the edit's Name for the value; probe a couple:
+    await probe({ controlId: "158" }, "display alt (id 158)");
+
+    log("\n=== Full digit row sanity check (0-9 = ids 129-138) ===");
+    for (let d = 0; d <= 9; d++) {
+      const id = String(129 + d);
+      await probe({ controlId: id }, `digit ${d}  (id ${id})`);
     }
 
-    // --- Hypothesis C: can we find ANY generic control under the window? ---
-    log("\n=== C) Generic containers under 'Calculator' ===");
-    await probe("Calculator", { className: "Button" }, "class='Button'");
-    await probe("Calculator", { className: "Text" }, "class='Text'");
-    await probe("Calculator", { className: "NamedContainerAutomationPeer" }, "class='NamedContainer...'");
-    await probe("Calculator", { name: "Number pad" }, "name='Number pad'");
-    await probe("Calculator", { name: "Standard" }, "name='Standard'");
-
-    log("\nDiscovery v2 done. Look for any HIT lines above — they tell us which");
-    log("windowTitle + locator combination actually reaches Calculator's controls.");
-    log("If EVERYTHING missed, UIA can't see this Calculator and we should drive");
-    log("it by keyboard + OCR instead (see the alternative test).");
-
-    zephyrLog("Discovery v2 complete.", "Pass");
+    log("\nDiscovery v3 done. The HIT lines confirm the numeric control IDs.");
+    log("Test 02 will use: 7=136, 6=135, +=93, ==121, display=150.");
+    zephyrLog("Discovery v3 complete.", "Pass");
 
     log("\nClosing Calculator...");
-    await driver.focusWindow("Calculator");
+    await driver.focusWindow(WIN);
     await driver.closeWindow();
     await driver.pause(500);
   } catch (err) {
