@@ -9,6 +9,7 @@ becomes a test card.
 
 | # | Test | Capability shown | App |
 |---|------|------------------|-----|
+| 00 | Calculator — Control Discovery | `findControl` probe — prints which control names/IDs exist on your build | Calculator |
 | 01 | Notepad — Keyboard, Hotkeys & Clipboard | `type`, `keyPress`, `hotkey`, `setClipboard`, `getClipboard` | Notepad |
 | 02 | Calculator — UI Automation Controls | `findControl`, `clickControl`, `getControlText` (no coordinates) | Calculator |
 | 03 | Notepad — Mouse Gestures | `doubleClick`, `tripleClick`, `mouseClick`, `shiftClick`, `drag`, window-relative coords | Notepad |
@@ -19,6 +20,12 @@ becomes a test card.
 
 ## Before you run
 
+- **Calculator control identifiers vary by Windows version.** Test 02 targets
+  buttons by Name ("Seven", "Plus", "Equals") with fallbacks, which works on
+  Windows 11. If it still fails with "Control not found", run **test 00
+  (Control Discovery)** first — it probes a list of candidate names and
+  AutomationIds and logs which ones exist on your build. Copy the `HIT`
+  identifiers into test 02.
 - **Test 06 needs three reference images.** See
   `tests/06-Paint-Image-Recognition/images/README.txt` for exactly what to
   capture and the filenames to use. The other six tests run as-is.
@@ -39,8 +46,10 @@ coordinate-free and the most robust to run first.
 
 ## Suggested demo order
 
-1. **02 (UIA)** and **05 (OCR)** — coordinate-free, most reliable, good openers.
-2. **01 (keyboard/clipboard)** and **04 (window mgmt)** — solid, no setup.
-3. **07 (parameters/secrets)** — after adding the `DEMO_SECRET`.
-4. **03 (mouse gestures)** and **06 (image recognition)** — last, since they may
+1. **00 (Control Discovery)** — run once to confirm your Calculator's control
+   identifiers, then you can ignore it.
+2. **02 (UIA)** and **05 (OCR)** — coordinate-free, most reliable, good openers.
+3. **01 (keyboard/clipboard)** and **04 (window mgmt)** — solid, no setup.
+4. **07 (parameters/secrets)** — after adding the `DEMO_SECRET`.
+5. **03 (mouse gestures)** and **06 (image recognition)** — last, since they may
    need a coordinate tweak / the reference PNGs.
