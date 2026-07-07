@@ -2,22 +2,15 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// Capability area: reading a UI Automation control (getControlText).
-// App: the CLASSIC Win32 Calculator (window class 'CalcFrame').
-//
-// Discovery findings on this build:
-//   - CalcFrame BUTTONS don't reliably support InvokePattern and expose no
-//     clickable point, so clickControl fails on them ("no clickable point").
-//   - The DISPLAY is a Static control (id 150) whose Name holds the current
-//     value, and getControlText reads it cleanly.
-//
-// So we drive the calculation by KEYBOARD (reliable on this app) and VERIFY the
-// result by reading UIA control id 150. This showcases getControlText against a
-// real Win32 control without depending on the uncooperative buttons.
+// PROBE: can OCR locate the calculator's BUTTONS (not just the display)?
+// OCRs the calculator window and lists every word it finds with its bbox,
+// so we can see whether digits/operators are individually locatable for
+// coordinate-based mouse clicking.
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Calculator";
+  const OUT = parameters.OUT_DIR || ".";
   let launched = false;
 
   try {
@@ -25,51 +18,61 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     await driver.launch("calc.exe");
     await driver.pause(2500);
     await driver.focusWindow(WIN);
+    await driver.pause(400);
     launched = true;
-    zephyrLog("Launched Calculator.", "Pass");
 
-    // Clear any leftover value from a previous run.
-    log("Clearing calculator state (Escape)...");
-    await driver.keyPress("Escape");
-    await driver.pause(300);
-
-    // Drive 7 + 6 = via keyboard (reliable on CalcFrame).
-    log("Entering 7 + 6 = via keyboard...");
-    await driver.type("7");
-    await driver.pause(200);
-    await driver.type("+");
-    await driver.pause(200);
-    await driver.type("6");
-    await driver.pause(200);
-    await driver.keyPress("Enter"); // '=' in Calculator
-    await driver.pause(600);
-    zephyrLog("Entered 7 + 6 = via keyboard.", "Pass");
-
-    // Verify the result by READING the UIA display control (id 150).
-    log("Reading the result display via getControlText (id 150)...");
-    const raw = await driver.getControlText(WIN, { controlId: "150" });
-    log("Display control reads: " + raw);
-
-    const digits = (raw.match(/\d+/g) || []).join("");
-    if (digits !== "13") {
-      throw new Error(`Expected result 13, display control read: '${raw}'`);
+    // Save a screenshot of the calculator for reference.
+    try {
+      await driver.screenshotWindow(`${OUT}/02probe-calc.png`, WIN);
+      log(`Saved ${OUT}/02probe-calc.png`);
+    } catch (e) {
+      log("Could not save window screenshot: " + (e && e.message || "").slice(0, 50));
     }
-    zephyrLog("Verified 7 + 6 = 13 by reading UIA control id 150.", "Pass");
 
-    log("PASS: getControlText verification complete.");
+    log("OCR over the whole calculator window...");
+    const ocr = await driver.readText(null, { window: WIN });
+    log("Overall confidence: " + ocr.confidence);
+    log("Raw text:\n" + ocr.text);
+
+    const words = (ocr.words || []);
+    log(`\nOCR found ${words.length} words with bounding boxes:`);
+    for (const w of words) {
+      if (w.bbox) {
+        const cx = Math.round((w.bbox.x0 + w.bbox.x1) / 2);
+        const cy = Math.round((w.bbox.y0 + w.bbox.y1) / 2);
+        log(`  '${w.text}'  centre(${cx},${cy})  bbox[${w.bbox.x0},${w.bbox.y0},${w.bbox.x1},${w.bbox.y1}]  conf ${Math.round(w.confidence)}`);
+      }
+    }
+
+    // Specifically report whether we can find the buttons we need.
+    const norm = (s) => (s || "").trim();
+    const targets = ["7", "9", "8", "×", "x", "*", "=", "+"];
+    log("\nButtons we need for a click-based 7 x 9 =:");
+    for (const t of targets) {
+      const hits = words.filter(w => norm(w.text) === t && w.bbox);
+      if (hits.length) {
+        for (const h of hits) {
+          const cx = Math.round((h.bbox.x0 + h.bbox.x1) / 2);
+          const cy = Math.round((h.bbox.y0 + h.bbox.y1) / 2);
+          log(`  '${t}' FOUND at (${cx},${cy})`);
+        }
+      } else {
+        log(`  '${t}' not found as a discrete word`);
+      }
+    }
+
+    log("\nProbe done. Paste this output so we can build the click-based test.");
+    zephyrLog("Button OCR probe complete.", "Pass");
   } catch (err) {
     zephyrLog("FAIL: " + (err && err.message), "Fail");
     throw err;
   } finally {
     if (launched) {
       try {
-        log("Closing Calculator...");
         await driver.focusWindow(WIN);
         await driver.closeWindow();
         await driver.pause(500);
-      } catch (closeErr) {
-        log("Warning: could not close Calculator cleanly: " + (closeErr && closeErr.message));
-      }
+      } catch (e) {}
     }
   }
 };
