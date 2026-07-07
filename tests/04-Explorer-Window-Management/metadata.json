@@ -1,0 +1,10 @@
+{
+  "title": "Explorer — Window Management & Screenshots",
+  "needed-parameters": [
+    {
+      "name": "SCREENSHOT_DIR",
+      "label": "Directory to save screenshots into",
+      "default": "."
+    }
+  ]
+}

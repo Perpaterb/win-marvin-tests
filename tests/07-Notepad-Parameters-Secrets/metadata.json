@@ -1,0 +1,15 @@
+{
+  "title": "Notepad — Parameters & Secrets",
+  "needed-parameters": [
+    {
+      "name": "GREETING",
+      "label": "Greeting text to type",
+      "default": "Hello from Marvin"
+    },
+    {
+      "name": "DEMO_SECRET",
+      "label": "Demo secret (pre-filled from Secrets Manager)",
+      "default": "${{ secrets.DEMO_SECRET }}"
+    }
+  ]
+}
