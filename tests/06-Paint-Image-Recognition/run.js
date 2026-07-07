@@ -22,7 +22,7 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
       const from = { x: pl[i][0], y: pl[i][1] };
       const to = { x: pl[i + 1][0], y: pl[i + 1][1] };
       await driver.drag({ from, to });
-      await driver.pause(60);
+      await driver.pause(10);
     }
   }
 
