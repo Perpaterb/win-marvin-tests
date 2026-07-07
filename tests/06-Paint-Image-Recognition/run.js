@@ -2,15 +2,29 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// OPTION A: try to make Paint draw using only the test-level drag API.
-// Strategy: select the brush (single click works), then attempt several drag
-// styles and screenshot after each so we can SEE which, if any, drew a stroke.
+// Draws Marvin (Hitchhiker's Guide) in Paint as line-art.
+// Each polyline is traced as a series of short chained drags — the drag style
+// that works reliably on this VM. Brush is selected first via image match.
+//
+const PATHS = [["head", [[475, 265], [476, 254], [481, 244], [488, 234], [497, 226], [508, 219], [521, 214], [535, 211], [550, 210], [565, 211], [579, 214], [592, 219], [603, 226], [612, 234], [619, 244], [624, 254], [625, 265], [625, 265], [625, 330], [625, 330], [622, 336], [615, 341], [603, 346], [588, 349], [569, 351], [550, 352], [531, 351], [512, 349], [497, 346], [485, 341], [478, 336], [475, 330], [475, 330], [475, 265]]], ["eyeL", [[534, 290], [533, 296], [529, 301], [523, 304], [517, 304], [511, 301], [507, 296], [506, 290], [507, 284], [511, 279], [517, 276], [523, 276], [529, 279], [533, 284], [534, 290]]], ["eyeR", [[594, 290], [593, 296], [589, 301], [583, 304], [577, 304], [571, 301], [567, 296], [566, 290], [567, 284], [571, 279], [577, 276], [583, 276], [589, 279], [593, 284], [594, 290]]], ["neck", [[535, 360], [535, 385], [565, 385], [565, 360]]], ["body", [[440, 395], [442, 389], [448, 384], [459, 378], [472, 374], [489, 370], [508, 367], [529, 366], [550, 365], [571, 366], [592, 367], [611, 370], [628, 374], [641, 378], [652, 384], [658, 389], [660, 395], [660, 395], [665, 535], [665, 535], [663, 543], [656, 550], [646, 557], [631, 563], [614, 568], [594, 572], [572, 574], [550, 575], [528, 574], [506, 572], [486, 568], [469, 563], [454, 557], [444, 550], [437, 543], [435, 535], [435, 535], [440, 395]]], ["armL", [[445, 410], [400, 440], [390, 510], [400, 580], [425, 600]]], ["handL", [[448, 615], [446, 623], [440, 629], [432, 633], [424, 633], [416, 629], [410, 623], [408, 615], [410, 607], [416, 601], [424, 597], [432, 597], [440, 601], [446, 607], [448, 615]]], ["armR", [[655, 410], [700, 440], [710, 510], [700, 580], [675, 600]]], ["handR", [[692, 615], [690, 623], [684, 629], [676, 633], [668, 633], [660, 629], [654, 623], [652, 615], [654, 607], [660, 601], [668, 597], [676, 597], [684, 601], [690, 607], [692, 615]]], ["legL", [[505, 575], [500, 650], [498, 710]]], ["footL", [[475, 710], [525, 710]]], ["legR", [[595, 575], [600, 650], [602, 710]]], ["footR", [[575, 710], [625, 710]]]];
+
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Paint";
   const OUT = parameters.OUT_DIR || ".";
   let launched = false;
+
+  // Trace one polyline as chained short drags. Move to the first point, then
+  // drag point-to-point. Small pauses let Paint register each segment.
+  async function tracePolyline(pl) {
+    for (let i = 0; i < pl.length - 1; i++) {
+      const from = { x: pl[i][0], y: pl[i][1] };
+      const to = { x: pl[i + 1][0], y: pl[i + 1][1] };
+      await driver.drag({ from, to });
+      await driver.pause(60);
+    }
+  }
 
   try {
     log("Launching Paint...");
@@ -22,74 +36,41 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     launched = true;
     zephyrLog("Launched and maximised Paint.", "Pass");
 
-    // Confirm UI and select the brush (click works for big targets).
     log("Detecting Paint UI...");
     await driver.waitForImage("paint-window.png", { timeout: 15000, threshold: 0.7 });
 
     log("Selecting the brush tool...");
-    const brush = await driver.findImage("brush-tool.png", { threshold: 0.7 });
-    if (!brush.found) throw new Error("Could not find brush tool.");
     await driver.clickImage("brush-tool.png", { threshold: 0.7 });
-    await driver.pause(1000); // give the selection time to take
+    await driver.pause(1000);
     zephyrLog("Selected the brush tool.", "Pass");
 
-    // A canvas point well clear of the toolbar. The canvas starts ~y=140 and
-    // spans a large area; pick coordinates comfortably inside it.
-    const baseX = 300, baseY = 400;
-
-    // --- Attempt 1: one slow, long drag ---
-    log("Attempt 1: single long drag...");
-    await driver.mouseMove(baseX, baseY);
-    await driver.pause(400);
-    await driver.drag({ from: { x: baseX, y: baseY }, to: { x: baseX + 250, y: baseY } });
-    await driver.pause(600);
-    await driver.screenshot(`${OUT}/06-drag-attempt1.png`);
-    log("Saved 06-drag-attempt1.png");
-
-    // --- Attempt 2: chained short drags through intermediate points ---
-    log("Attempt 2: chained short drags...");
-    const y2 = baseY + 80;
-    const steps = [0, 50, 100, 150, 200, 250];
-    for (let i = 0; i < steps.length - 1; i++) {
-      const fx = baseX + steps[i];
-      const tx = baseX + steps[i + 1];
-      await driver.mouseMove(fx, y2);
+    log("Drawing Marvin — " + PATHS.length + " polylines...");
+    for (const [name, pl] of PATHS) {
+      log("  tracing: " + name + " (" + (pl.length - 1) + " segments)");
+      await tracePolyline(pl);
       await driver.pause(150);
-      await driver.drag({ from: { x: fx, y: y2 }, to: { x: tx, y: y2 } });
-      await driver.pause(200);
     }
-    await driver.screenshot(`${OUT}/06-drag-attempt2.png`);
-    log("Saved 06-drag-attempt2.png");
+    zephyrLog("Finished drawing Marvin.", "Pass");
 
-    // --- Attempt 3: window-relative drag (in case screen coords are the issue) ---
-    log("Attempt 3: window-relative drag...");
-    const y3 = baseY + 160;
-    await driver.drag(
-      { from: { x: baseX, y: y3 }, to: { x: baseX + 250, y: y3 } },
-      { relativeTo: WIN }
-    );
-    await driver.pause(600);
-    await driver.screenshot(`${OUT}/06-drag-attempt3.png`);
-    log("Saved 06-drag-attempt3.png");
+    // Save a screenshot of the result.
+    try {
+      await driver.screenshotWindow(OUT + "/marvin-drawing.png", WIN);
+      log("Saved marvin-drawing.png");
+    } catch (e) {
+      await driver.screenshot(OUT + "/marvin-drawing.png");
+      log("Saved full-screen marvin-drawing.png");
+    }
 
-    log("Done. Inspect 06-drag-attempt1/2/3.png to see which (if any) drew a stroke.");
-    log("If NONE drew, the drag primitive needs the driver-level fix (Option B).");
-    zephyrLog("Drag attempts complete — inspect the saved screenshots.", "Pass");
+    log("PASS: Marvin drawing complete. Here I am, brain the size of a planet...");
   } catch (err) {
     zephyrLog("FAIL: " + (err && err.message), "Fail");
     throw err;
   } finally {
     if (launched) {
       try {
-        log("Closing Paint without saving...");
-        await driver.focusWindow(WIN);
-        await driver.closeWindow();
-        await driver.pause(1000);
-        await driver.keyPress("Alt", "n");
-        await driver.pause(500);
-      } catch (closeErr) {
-        log("Warning: could not close Paint cleanly: " + (closeErr && closeErr.message));
-      }
+        log("Leaving Paint open so you can see the drawing.");
+        // Not closing — so you can admire (or save) Marvin.
+      } catch (e) {}
     }
   }
 };
