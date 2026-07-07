@@ -2,75 +2,74 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// DISCOVERY TEST — not a real assertion test.
-// Purpose: launch Calculator and probe a large list of candidate control
-// identifiers (both Names and legacy AutomationIds) so you can see EXACTLY which
-// ones exist on your Windows build. Use the results to pin down the identifiers
-// used in test 02.
+// DISCOVERY v2 — locate WHERE Calculator's controls live.
+// v1 found zero controls under a window matching "Calculator", which means the
+// buttons aren't reachable as descendants of that top-level window (common on
+// Win11: calc.exe launches CalculatorApp.exe; the UIA tree can sit elsewhere).
 //
-// findControl throws when a control isn't found, so each probe is wrapped in a
-// try/catch. A "HIT" line means that identifier is valid on your machine.
+// This version tests several hypotheses so we learn the real structure:
+//   A) Are the buttons reachable from the DESKTOP ROOT (windowTitle = null)?
+//   B) Does a different window title ("Calculator" exact vs substring) help?
+//   C) Can we at least find ANY named container (e.g. the app frame)?
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
-  const WIN = "Calculator";
-
-  // Probe by Name.
-  const nameCandidates = [
-    "Seven", "7",
-    "Six", "6",
-    "Plus", "Add", "+",
-    "Equals", "Equal", "=",
-    "Display", "Result", "Clear", "Clear entry",
-    "Minus", "Subtract", "Multiply", "Divide"
-  ];
-
-  // Probe by AutomationId (legacy / build-specific).
-  const idCandidates = [
-    "num7Button", "num6Button",
-    "plusButton", "equalButton", "minusButton",
-    "multiplyButton", "divideButton", "clearButton",
-    "CalculatorResults", "CalculatorExpression"
-  ];
-
-  async function probe(locator, label) {
+  async function probe(windowTitle, locator, label) {
     try {
-      const c = await driver.findControl(WIN, locator);
+      const c = await driver.findControl(windowTitle, locator);
       log(`HIT   ${label} -> name='${c.name}' class='${c.className}' autoId='${c.automationId}'`);
-      return true;
+      return c;
     } catch (e) {
-      log(`miss  ${label}`);
-      return false;
+      log(`miss  ${label}  (${(e && e.message || "").slice(0, 60)})`);
+      return null;
     }
   }
 
   try {
     log("Launching Calculator...");
     await driver.launch("calc.exe");
-    await driver.pause(2500);
-    await driver.focusWindow(WIN);
-    log("Focused Calculator window.\n");
+    await driver.pause(3000);
+    await driver.focusWindow("Calculator");
+    const title = await driver.getWindowTitle();
+    log("Focused window title reported as: '" + title + "'\n");
 
-    log("=== Probing by Name ===");
-    let nameHits = 0;
-    for (const name of nameCandidates) {
-      if (await probe({ name }, `name="${name}"`)) nameHits++;
+    // --- Hypothesis A: search from the DESKTOP ROOT (windowTitle = null) ---
+    log("=== A) From desktop root (windowTitle = null) ===");
+    await probe(null, { name: "Seven" }, "root name='Seven'");
+    await probe(null, { name: "Five" }, "root name='Five'");
+    await probe(null, { controlId: "num7Button" }, "root autoId='num7Button'");
+    // The Calculator app frame / results are often findable from root:
+    await probe(null, { name: "Calculator" }, "root name='Calculator'");
+    await probe(null, { className: "ApplicationFrameWindow" }, "root class='ApplicationFrameWindow'");
+    await probe(null, { className: "Windows.UI.Core.CoreWindow" }, "root class='CoreWindow'");
+
+    // --- Hypothesis B: exact reported title instead of substring "Calculator" ---
+    log("\n=== B) Using the exact reported window title ===");
+    if (title && title.trim()) {
+      await probe(title, { name: "Seven" }, `title='${title}' name='Seven'`);
+      await probe(title, { name: "Five" }, `title='${title}' name='Five'`);
+      await probe(title, { className: "Button" }, `title='${title}' class='Button'`);
+    } else {
+      log("(no usable window title reported; skipping)");
     }
 
-    log("\n=== Probing by AutomationId ===");
-    let idHits = 0;
-    for (const controlId of idCandidates) {
-      if (await probe({ controlId }, `controlId="${controlId}"`)) idHits++;
-    }
+    // --- Hypothesis C: can we find ANY generic control under the window? ---
+    log("\n=== C) Generic containers under 'Calculator' ===");
+    await probe("Calculator", { className: "Button" }, "class='Button'");
+    await probe("Calculator", { className: "Text" }, "class='Text'");
+    await probe("Calculator", { className: "NamedContainerAutomationPeer" }, "class='NamedContainer...'");
+    await probe("Calculator", { name: "Number pad" }, "name='Number pad'");
+    await probe("Calculator", { name: "Standard" }, "name='Standard'");
 
-    log(`\nSUMMARY: ${nameHits} name hit(s), ${idHits} automationId hit(s).`);
-    log("Copy the HIT identifiers into test 02 to make it match your build.");
+    log("\nDiscovery v2 done. Look for any HIT lines above — they tell us which");
+    log("windowTitle + locator combination actually reaches Calculator's controls.");
+    log("If EVERYTHING missed, UIA can't see this Calculator and we should drive");
+    log("it by keyboard + OCR instead (see the alternative test).");
 
-    // This discovery test always 'passes' as long as it ran — it's for info.
-    zephyrLog(`Discovery complete: ${nameHits} name hits, ${idHits} id hits.`, "Pass");
+    zephyrLog("Discovery v2 complete.", "Pass");
 
     log("\nClosing Calculator...");
-    await driver.focusWindow(WIN);
+    await driver.focusWindow("Calculator");
     await driver.closeWindow();
     await driver.pause(500);
   } catch (err) {
