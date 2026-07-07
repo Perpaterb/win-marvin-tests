@@ -3,34 +3,37 @@ function log(msg) {
 }
 
 // Capability area: mouse gestures — doubleClick, tripleClick, mouseClick +
-// shiftClick range select, and a drag. App: Notepad.
+// shiftClick range select. App: Notepad.
 //
-// Made self-contained after an earlier run grabbed STALE Notepad content:
-//   - Clipboard is cleared first, so a leftover value can't cause a false pass.
-//   - We open a FRESH Notepad and verify it's empty before typing.
-//   - We type a known SENTINEL word ("ZEBRACODE") on its own line so a
-//     triple-click can only select that word/line, never neighbouring text.
-//   - Assertions check for the sentinel specifically.
+// Self-contained: opens a FRESH Notepad, verifies it's empty, types a unique
+// SENTINEL word, and asserts selections against it. The clipboard is "cleared"
+// by writing a placeholder token (PowerShell's Set-Clipboard rejects an empty
+// string, so we can't set it to ""), then we check the copied value differs
+// from that token.
 //
-// Click coordinates are window-relative. They're still approximate; if a
-// selection assertion fails on your resolution, nudge CLICK_X / CLICK_Y below.
+// Click coordinates are window-relative and approximate; tweak CLICK_X/CLICK_Y
+// if a selection assertion fails on your resolution.
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Notepad";
   const SENTINEL = "ZEBRACODE";
+  const CLIP_MARK = "__CLEARED__"; // placeholder (can't set clipboard to "")
 
-  // Approx. click point inside the text area, relative to the Notepad window.
   const CLICK_X = 120;
   const CLICK_Y = 90;
 
   let launched = false;
 
+  // Reset clipboard to a known marker before each capture.
+  async function resetClip() {
+    await driver.setClipboard(CLIP_MARK);
+    await driver.pause(150);
+  }
+
   try {
-    // Clear the clipboard so nothing from a previous run can leak in.
-    log("Clearing clipboard...");
-    await driver.setClipboard("");
-    await driver.pause(200);
+    log("Resetting clipboard to a known marker...");
+    await resetClip();
 
     log("Launching a fresh Notepad...");
     await driver.launch("notepad.exe");
@@ -41,21 +44,20 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     launched = true;
     zephyrLog("Launched and maximised Notepad.", "Pass");
 
-    // Verify the document is empty before we type. Select-all + copy; if there's
-    // pre-existing content, bail out rather than test against stale text.
+    // Verify the document is empty before typing.
     log("Checking Notepad is empty...");
     await driver.hotkey("Ctrl", "a");
     await driver.pause(200);
     await driver.hotkey("Ctrl", "c");
     await driver.pause(300);
-    const existing = await driver.getClipboard();
-    if (existing && existing.trim().length > 0) {
-      throw new Error("Notepad was not empty at start (found stale content). Aborting to avoid a false result.");
+    let existing = await driver.getClipboard();
+    // If nothing was selectable, Ctrl+C leaves the marker in place.
+    if (existing !== CLIP_MARK && existing.trim().length > 0) {
+      throw new Error("Notepad was not empty at start (stale content). Aborting to avoid a false result.");
     }
     zephyrLog("Confirmed a clean, empty Notepad.", "Pass");
 
-    // Type the sentinel word on its own line, then a second line so the caret
-    // isn't ambiguous. The sentinel is unique and space-free.
+    // Type the sentinel word on its own line, then a second line.
     log(`Typing sentinel word '${SENTINEL}'...`);
     await driver.type(SENTINEL);
     await driver.keyPress("Enter");
@@ -65,8 +67,7 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
 
     // --- Double-click selects the sentinel word ---
     log("Double-clicking to select the sentinel word...");
-    await driver.setClipboard(""); // reset before each capture
-    await driver.pause(150);
+    await resetClip();
     await driver.doubleClick(CLICK_X, CLICK_Y, { relativeTo: WIN });
     await driver.pause(300);
     await driver.hotkey("Ctrl", "c");
@@ -79,10 +80,9 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     }
     zephyrLog("Double-click selected the sentinel word.", "Pass");
 
-    // --- Triple-click selects the whole first line (just the sentinel here) ---
+    // --- Triple-click selects the whole first line ---
     log("Triple-clicking to select the whole line...");
-    await driver.setClipboard("");
-    await driver.pause(150);
+    await resetClip();
     await driver.tripleClick(CLICK_X, CLICK_Y, { relativeTo: WIN });
     await driver.pause(300);
     await driver.hotkey("Ctrl", "c");
@@ -99,15 +99,11 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     zephyrLog("Triple-click selected the sentinel line only.", "Pass");
 
     // --- Range select: click at line start, shift-click further along ---
-    // This demonstrates mouseClick + shiftClick. We assert we captured *some*
-    // text starting from the sentinel; exact span depends on font metrics.
     log("Range-selecting with mouseClick then shiftClick...");
-    await driver.setClipboard("");
-    await driver.pause(150);
+    await resetClip();
     await driver.mouseClick(CLICK_X, CLICK_Y, "left", { relativeTo: WIN });
     await driver.pause(200);
-    // shiftClick takes SCREEN coordinates; approximate a point to the right.
-    await driver.shiftClick(CLICK_X + 120, CLICK_Y, "left");
+    await driver.shiftClick(CLICK_X + 120, CLICK_Y, "left"); // screen coords
     await driver.pause(300);
     await driver.hotkey("Ctrl", "c");
     await driver.pause(300);
