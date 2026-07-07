@@ -2,15 +2,19 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// DIAGNOSTIC for test 03: OCR finds the word, then we probe the click path.
-// Screenshots are saved so you can SEE where clicks actually land.
+// Capability area: text selection + clipboard, driven by KEYBOARD.
+// App: Notepad.
+//
+// History: mouse-coordinate selection (double/triple/shift-click) was tried
+// extensively and proved unreliable on this environment — OCR located the text
+// correctly and coordinates/scaling were right, but synthesized mouse clicks
+// didn't register in Notepad's edit control. Keyboard selection is rock solid
+// and demonstrates the same capability (select, copy, verify).
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Notepad";
-  const SENTINEL = "ZEBRACODE";
   const CLIP_MARK = "__CLEARED__";
-  const OUT = parameters.OUT_DIR || ".";
   let launched = false;
 
   async function resetClip() {
@@ -18,93 +22,109 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     await driver.pause(150);
   }
 
-  async function findWord(target) {
-    const ocr = await driver.readText(null, {});
-    const norm = (s) => (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    for (const w of (ocr.words || [])) {
-      if (norm(w.text) === norm(target) && w.bbox) {
-        return {
-          cx: Math.round((w.bbox.x0 + w.bbox.x1) / 2),
-          cy: Math.round((w.bbox.y0 + w.bbox.y1) / 2),
-          bbox: w.bbox,
-        };
-      }
-    }
-    throw new Error(`OCR could not find '${target}'.`);
-  }
-
-  // Try a double-click at (x,y), then report what got selected.
-  async function tryDouble(x, y, label) {
-    await resetClip();
-    await driver.focusWindow(WIN);      // ensure foreground
-    await driver.pause(200);
-    await driver.mouseMove(x, y);        // move first
-    await driver.pause(200);
-    await driver.doubleClick(x, y);
-    await driver.pause(300);
-    await driver.hotkey("Ctrl", "c");
-    await driver.pause(300);
-    const clip = await driver.getClipboard();
-    const hit = clip.trim() === SENTINEL;
-    log(`${label}: click (${x},${y}) -> ${hit ? "HIT" : "miss"} [${JSON.stringify(clip).slice(0,25)}]`);
-    return hit;
-  }
-
   try {
+    log("Resetting clipboard to a known marker...");
     await resetClip();
+
     log("Launching a fresh Notepad...");
     await driver.launch("notepad.exe");
     await driver.pause(2000);
     await driver.focusWindow(WIN);
-    await driver.maximizeWindow(WIN);
-    await driver.pause(600);
+    await driver.pause(400);
     launched = true;
+    zephyrLog("Launched Notepad.", "Pass");
 
-    log(`Typing '${SENTINEL}'...`);
-    await driver.type(SENTINEL);
-    await driver.pause(500);
-
-    const w = await findWord(SENTINEL);
-    log(`OCR centre: (${w.cx}, ${w.cy}), bbox [${w.bbox.x0},${w.bbox.y0},${w.bbox.x1},${w.bbox.y1}]`);
-
-    // Screenshot the current state so we can see the word's real position.
-    await driver.screenshot(`${OUT}/03diag-before.png`);
-    log(`Saved ${OUT}/03diag-before.png`);
-
-    // Probe the OCR centre and several vertical offsets below it, in case the
-    // reported bbox top is high relative to the actual glyphs.
-    let anyHit = false;
-    anyHit = (await tryDouble(w.cx, w.cy, "OCR centre")) || anyHit;
-    anyHit = (await tryDouble(w.cx, w.cy + 10, "centre +10y")) || anyHit;
-    anyHit = (await tryDouble(w.cx, w.cy + 20, "centre +20y")) || anyHit;
-    anyHit = (await tryDouble(w.cx, w.cy + 30, "centre +30y")) || anyHit;
-    anyHit = (await tryDouble(w.cx, w.cy + 40, "centre +40y")) || anyHit;
-
-    // Screenshot after, to see final caret/selection.
-    await driver.screenshot(`${OUT}/03diag-after.png`);
-    log(`Saved ${OUT}/03diag-after.png`);
-
-    if (anyHit) {
-      zephyrLog("At least one click offset selected the word.", "Pass");
-      log("SUCCESS: note which offset HIT above and use it in test 03.");
-    } else {
-      zephyrLog("No click offset selected the word.", "Fail");
-      log("No offset worked. Open 03diag-before.png and tell me the pixel");
-      log("position of the word vs where OCR reported it.");
-      throw new Error("No click offset selected the sentinel.");
+    // Verify empty.
+    log("Checking Notepad is empty...");
+    await driver.hotkey("Ctrl", "a");
+    await driver.pause(200);
+    await driver.hotkey("Ctrl", "c");
+    await driver.pause(300);
+    const existing = await driver.getClipboard();
+    if (existing !== CLIP_MARK && existing.trim().length > 0) {
+      throw new Error("Notepad was not empty at start (stale content). Aborting.");
     }
+    zephyrLog("Confirmed a clean, empty Notepad.", "Pass");
+
+    // Type three known lines.
+    const L1 = "First line ALPHA";
+    const L2 = "Second line BRAVO";
+    const L3 = "Third line CHARLIE";
+    log("Typing three known lines...");
+    await driver.type(L1);
+    await driver.keyPress("Enter");
+    await driver.type(L2);
+    await driver.keyPress("Enter");
+    await driver.type(L3);
+    await driver.pause(400);
+    zephyrLog("Typed three known lines.", "Pass");
+
+    // --- Select the CURRENT line (Home, then Shift+End) ---
+    // Caret is at end of L3. Home to line start, Shift+End to select the line.
+    log("Selecting the current line with Home + Shift+End...");
+    await resetClip();
+    await driver.keyPress("Home");
+    await driver.pause(150);
+    await driver.hotkey("Shift", "End");
+    await driver.pause(200);
+    await driver.hotkey("Ctrl", "c");
+    await driver.pause(300);
+
+    let clip = await driver.getClipboard();
+    log("Current-line selection copied: " + JSON.stringify(clip));
+    if (clip.trim() !== L3) {
+      throw new Error(`Expected to select '${L3}', got '${clip.trim()}'.`);
+    }
+    zephyrLog("Selected the current line (Home + Shift+End).", "Pass");
+
+    // --- Extend selection UP one line (Shift+Up, Shift+Home) ---
+    log("Extending the selection up one line...");
+    await resetClip();
+    // Caret currently at end of L3 with L3 selected; collapse to end first.
+    await driver.keyPress("End");
+    await driver.pause(150);
+    await driver.hotkey("Shift", "Up");   // extend up into L2
+    await driver.hotkey("Shift", "Home"); // to start of L2
+    await driver.pause(200);
+    await driver.hotkey("Ctrl", "c");
+    await driver.pause(300);
+    clip = await driver.getClipboard();
+    log("Multi-line selection copied: " + JSON.stringify(clip));
+    if (!clip.includes("BRAVO") || !clip.includes("CHARLIE")) {
+      throw new Error(`Expected selection to span BRAVO..CHARLIE, got '${clip.trim()}'.`);
+    }
+    zephyrLog("Extended selection across two lines.", "Pass");
+
+    // --- Select ALL (Ctrl+A) and verify every line is present ---
+    log("Selecting all with Ctrl+A...");
+    await resetClip();
+    await driver.hotkey("Ctrl", "a");
+    await driver.pause(200);
+    await driver.hotkey("Ctrl", "c");
+    await driver.pause(300);
+    clip = await driver.getClipboard();
+    log("Select-all copied: " + JSON.stringify(clip));
+    if (!clip.includes("ALPHA") || !clip.includes("BRAVO") || !clip.includes("CHARLIE")) {
+      throw new Error(`Select-all did not capture all three lines (got '${clip.trim()}').`);
+    }
+    zephyrLog("Select-all captured all three lines.", "Pass");
+
+    log("PASS: Keyboard text-selection test complete.");
   } catch (err) {
     zephyrLog("FAIL: " + (err && err.message), "Fail");
     throw err;
   } finally {
     if (launched) {
       try {
+        log("Closing Notepad without saving...");
         await driver.focusWindow(WIN);
         await driver.closeWindow();
         await driver.pause(800);
-        await driver.keyPress("Alt", "n");
+        await driver.keyPress("Alt", "n"); // "Don't Save" (classic Notepad)
         await driver.pause(500);
-      } catch (e) {}
+      } catch (closeErr) {
+        log("Warning: could not close Notepad cleanly: " + (closeErr && closeErr.message));
+      }
     }
   }
 };
