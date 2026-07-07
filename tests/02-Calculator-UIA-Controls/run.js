@@ -2,38 +2,20 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// Capability area: real mouse-clicking of calculator buttons by coordinate.
-// App: classic CalcFrame Calculator.
+// Capability area: UI Automation controls — findControl (locate + inspect) and
+// getControlText (read a control's value). App: classic CalcFrame Calculator.
 //
-// Key fix: the calculator kept dropping BEHIND the Marvin window, so clicks
-// landed on the wrong window and the display stayed 0. We now focus + raise the
-// calculator immediately before EACH click, so it's guaranteed frontmost when
-// the click lands. Result is verified via getControlText(id 150).
+// What works on this calculator via UIA: locating controls by AutomationId and
+// reading the display's value. What does NOT: clickControl on the operator keys
+// (they expose no InvokePattern/clickable point — an app limitation). And the
+// keys can't be OCR'd either. So this test showcases UIA's strengths: it FINDS
+// and inspects the button controls, drives the calc by keyboard, then READS the
+// result from the display control to verify it.
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Calculator";
   let launched = false;
-
-  // Window-relative button centres (measured from a 422x636 window screenshot).
-  const BTN = {
-    "7": { x: 52,  y: 396 },
-    "*": { x: 285, y: 452 },
-    "9": { x: 208, y: 396 },
-    "=": { x: 365, y: 555 },
-  };
-
-  async function clickBtn(label) {
-    const p = BTN[label];
-    if (!p) throw new Error("No coordinate for button " + label);
-    // Re-focus the calculator right before the click so it can't be behind
-    // another window (e.g. Marvin) when the click fires.
-    await driver.focusWindow(WIN);
-    await driver.pause(250);
-    log(`Clicking '${label}' at window-relative (${p.x}, ${p.y})...`);
-    await driver.mouseClick(p.x, p.y, "left", { relativeTo: WIN });
-    await driver.pause(400);
-  }
 
   try {
     log("Launching Calculator...");
@@ -44,38 +26,51 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     launched = true;
     zephyrLog("Launched Calculator.", "Pass");
 
-    // Bring it to front and clear state.
-    await driver.focusWindow(WIN);
-    await driver.pause(300);
-    log("Clearing calculator state (Escape)...");
+    // --- UIA: locate and inspect controls by AutomationId ---
+    // Confirms UI Automation can find the button controls and read their
+    // properties (name/class/automationId), even though we can't invoke them.
+    log("Inspecting button controls via findControl...");
+    const toInspect = [
+      { id: "136", label: "digit 7" },
+      { id: "135", label: "digit 6" },
+      { id: "93",  label: "plus" },
+      { id: "121", label: "equals" },
+      { id: "150", label: "display" },
+    ];
+    for (const c of toInspect) {
+      const ctrl = await driver.findControl(WIN, { controlId: c.id });
+      log(`  ${c.label} (id ${c.id}) -> class='${ctrl.className}' name='${ctrl.name}' autoId='${ctrl.automationId}'`);
+    }
+    zephyrLog("Located and inspected calculator controls via UIA.", "Pass");
+
+    // --- Drive the calculation by keyboard ---
+    // (The operator button controls can't be invoked via UIA, so keyboard is
+    // the reliable input path; UIA's job here is reading the result.)
+    log("Clearing, then entering 7 + 6 = via keyboard...");
     await driver.keyPress("Escape");
     await driver.pause(300);
+    await driver.type("7");
+    await driver.pause(150);
+    await driver.type("+");
+    await driver.pause(150);
+    await driver.type("6");
+    await driver.pause(150);
+    await driver.keyPress("Enter"); // '='
+    await driver.pause(500);
+    zephyrLog("Entered 7 + 6 = via keyboard.", "Pass");
 
-    log("Computing 7 * 9 = by clicking buttons (re-focusing each time)...");
-    await clickBtn("7");
-    await clickBtn("*");
-    await clickBtn("9");
-    await clickBtn("=");
-    zephyrLog("Clicked 7 * 9 = via mouse.", "Pass");
-
-    // Re-focus before reading, then verify.
-    await driver.focusWindow(WIN);
-    await driver.pause(200);
-    log("Reading the result display (id 150)...");
+    // --- UIA: read the result from the display control ---
+    log("Reading the result from display control (id 150) via getControlText...");
     const raw = await driver.getControlText(WIN, { controlId: "150" });
-    log("Display reads: " + raw);
+    log("Display control value: " + raw);
 
     const digits = (raw.match(/\d+/g) || []).join("");
-    if (digits !== "63") {
-      throw new Error(
-        `Expected 63, display read '${raw}'. If it's 0, the calculator was ` +
-        `likely still behind another window or a coordinate is off; if it's a ` +
-        `different number, a coordinate landed on the wrong button.`
-      );
+    if (digits !== "13") {
+      throw new Error(`Expected 13, display control read '${raw}'.`);
     }
-    zephyrLog("Verified 7 * 9 = 63 by clicking buttons and reading the display.", "Pass");
+    zephyrLog("Verified 7 + 6 = 13 by reading the display control via UIA.", "Pass");
 
-    log("PASS: Mouse-click calculator test complete.");
+    log("PASS: UI Automation control test complete.");
   } catch (err) {
     zephyrLog("FAIL: " + (err && err.message), "Fail");
     throw err;
