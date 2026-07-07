@@ -29,10 +29,10 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
   try {
     log("Launching Paint...");
     await driver.launch("mspaint.exe");
-    await driver.pause(3000);
+    await driver.pause(1000);
     await driver.focusWindow(WIN);
     await driver.maximizeWindow(WIN);
-    await driver.pause(1000);
+    await driver.pause(200);
     launched = true;
     zephyrLog("Launched and maximised Paint.", "Pass");
 
@@ -41,14 +41,14 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
 
     log("Selecting the brush tool...");
     await driver.clickImage("brush-tool.png", { threshold: 0.7 });
-    await driver.pause(1000);
+    await driver.pause(200);
     zephyrLog("Selected the brush tool.", "Pass");
 
     log("Drawing Marvin — " + PATHS.length + " polylines...");
     for (const [name, pl] of PATHS) {
       log("  tracing: " + name + " (" + (pl.length - 1) + " segments)");
       await tracePolyline(pl);
-      await driver.pause(150);
+      await driver.pause(10);
     }
     zephyrLog("Finished drawing Marvin.", "Pass");
 
