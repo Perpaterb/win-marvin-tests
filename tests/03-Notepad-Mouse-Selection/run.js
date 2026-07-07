@@ -2,18 +2,18 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// Capability area: text selection + clipboard, driven by KEYBOARD.
-// App: Notepad.
+// Capability area: mouse gestures — doubleClick, tripleClick, mouseClick +
+// shiftClick range select. App: Notepad.
 //
-// History: mouse-coordinate selection (double/triple/shift-click) was tried
-// extensively and proved unreliable on this environment — OCR located the text
-// correctly and coordinates/scaling were right, but synthesized mouse clicks
-// didn't register in Notepad's edit control. Keyboard selection is rock solid
-// and demonstrates the same capability (select, copy, verify).
+// Mouse-only, now that VM mouse control is working. Coordinates are found via
+// OCR (locate the sentinel word's bounding box) rather than hardcoded pixels,
+// which was always the robust approach. Clipboard is used to verify each
+// selection actually captured the expected text.
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Notepad";
+  const SENTINEL = "ZEBRACODE";
   const CLIP_MARK = "__CLEARED__";
   let launched = false;
 
@@ -22,17 +22,34 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     await driver.pause(150);
   }
 
+  // OCR the screen; return the centre {x,y} of the first word matching target.
+  async function findWordCentre(target) {
+    const ocr = await driver.readText(null, {});
+    const norm = (s) => (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const want = norm(target);
+    for (const w of (ocr.words || [])) {
+      if (norm(w.text) === want && w.bbox) {
+        const cx = Math.round((w.bbox.x0 + w.bbox.x1) / 2);
+        const cy = Math.round((w.bbox.y0 + w.bbox.y1) / 2);
+        log(`Found '${target}' at bbox [${w.bbox.x0},${w.bbox.y0},${w.bbox.x1},${w.bbox.y1}] -> centre (${cx}, ${cy}).`);
+        return { x: cx, y: cy };
+      }
+    }
+    throw new Error(`OCR could not locate '${target}' on screen.`);
+  }
+
   try {
-    log("Resetting clipboard to a known marker...");
+    log("Resetting clipboard...");
     await resetClip();
 
     log("Launching a fresh Notepad...");
     await driver.launch("notepad.exe");
     await driver.pause(2000);
     await driver.focusWindow(WIN);
-    await driver.pause(400);
+    await driver.maximizeWindow(WIN);
+    await driver.pause(600);
     launched = true;
-    zephyrLog("Launched Notepad.", "Pass");
+    zephyrLog("Launched and maximised Notepad.", "Pass");
 
     // Verify empty.
     log("Checking Notepad is empty...");
@@ -46,70 +63,67 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     }
     zephyrLog("Confirmed a clean, empty Notepad.", "Pass");
 
-    // Type three known lines.
-    const L1 = "First line ALPHA";
-    const L2 = "Second line BRAVO";
-    const L3 = "Third line CHARLIE";
-    log("Typing three known lines...");
-    await driver.type(L1);
+    // Type the sentinel word on its own line, then a second line.
+    log(`Typing sentinel word '${SENTINEL}'...`);
+    await driver.type(SENTINEL);
     await driver.keyPress("Enter");
-    await driver.type(L2);
-    await driver.keyPress("Enter");
-    await driver.type(L3);
-    await driver.pause(400);
-    zephyrLog("Typed three known lines.", "Pass");
+    await driver.type("second line here");
+    await driver.pause(500);
+    zephyrLog("Typed the sentinel word and a second line.", "Pass");
 
-    // --- Select the CURRENT line (Home, then Shift+End) ---
-    // Caret is at end of L3. Home to line start, Shift+End to select the line.
-    log("Selecting the current line with Home + Shift+End...");
+    // Locate the word via OCR.
+    log("Locating the sentinel word via OCR...");
+    const centre = await findWordCentre(SENTINEL);
+    zephyrLog("Located the sentinel word on screen.", "Pass");
+
+    // --- Double-click selects the word ---
+    log("Double-clicking to select the sentinel word...");
     await resetClip();
-    await driver.keyPress("Home");
-    await driver.pause(150);
-    await driver.hotkey("Shift", "End");
-    await driver.pause(200);
+    await driver.doubleClick(centre.x, centre.y);
+    await driver.pause(300);
     await driver.hotkey("Ctrl", "c");
     await driver.pause(300);
-
     let clip = await driver.getClipboard();
-    log("Current-line selection copied: " + JSON.stringify(clip));
-    if (clip.trim() !== L3) {
-      throw new Error(`Expected to select '${L3}', got '${clip.trim()}'.`);
+    log("Word selection copied: " + JSON.stringify(clip));
+    if (clip.trim() !== SENTINEL) {
+      throw new Error(`Double-click did not select '${SENTINEL}' (got '${clip.trim()}').`);
     }
-    zephyrLog("Selected the current line (Home + Shift+End).", "Pass");
+    zephyrLog("Double-click selected the sentinel word.", "Pass");
 
-    // --- Extend selection UP one line (Shift+Up, Shift+Home) ---
-    log("Extending the selection up one line...");
+    // --- Triple-click selects the whole line ---
+    log("Triple-clicking to select the whole line...");
     await resetClip();
-    // Caret currently at end of L3 with L3 selected; collapse to end first.
-    await driver.keyPress("End");
-    await driver.pause(150);
-    await driver.hotkey("Shift", "Up");   // extend up into L2
-    await driver.hotkey("Shift", "Home"); // to start of L2
-    await driver.pause(200);
+    await driver.tripleClick(centre.x, centre.y);
+    await driver.pause(300);
     await driver.hotkey("Ctrl", "c");
     await driver.pause(300);
     clip = await driver.getClipboard();
-    log("Multi-line selection copied: " + JSON.stringify(clip));
-    if (!clip.includes("BRAVO") || !clip.includes("CHARLIE")) {
-      throw new Error(`Expected selection to span BRAVO..CHARLIE, got '${clip.trim()}'.`);
+    log("Line selection copied: " + JSON.stringify(clip));
+    if (!clip.includes(SENTINEL)) {
+      throw new Error(`Triple-click did not select the sentinel line (got '${clip.trim()}').`);
     }
-    zephyrLog("Extended selection across two lines.", "Pass");
+    if (clip.includes("second line")) {
+      throw new Error("Triple-click over-selected into the second line.");
+    }
+    zephyrLog("Triple-click selected the sentinel line only.", "Pass");
 
-    // --- Select ALL (Ctrl+A) and verify every line is present ---
-    log("Selecting all with Ctrl+A...");
+    // --- Range select: click at the word, shift-click to its right ---
+    log("Range-selecting with mouseClick then shiftClick...");
     await resetClip();
-    await driver.hotkey("Ctrl", "a");
+    await driver.mouseClick(centre.x, centre.y, "left");
     await driver.pause(200);
+    await driver.shiftClick(centre.x + 120, centre.y, "left");
+    await driver.pause(300);
     await driver.hotkey("Ctrl", "c");
     await driver.pause(300);
     clip = await driver.getClipboard();
-    log("Select-all copied: " + JSON.stringify(clip));
-    if (!clip.includes("ALPHA") || !clip.includes("BRAVO") || !clip.includes("CHARLIE")) {
-      throw new Error(`Select-all did not capture all three lines (got '${clip.trim()}').`);
+    log("Range selection copied: " + JSON.stringify(clip));
+    if (!clip.includes(SENTINEL)) {
+      throw new Error(`Range selection did not include '${SENTINEL}' (got '${clip.trim()}').`);
     }
-    zephyrLog("Select-all captured all three lines.", "Pass");
+    zephyrLog("Shift-click range selection captured the sentinel.", "Pass");
 
-    log("PASS: Keyboard text-selection test complete.");
+    log("PASS: Mouse selection test complete.");
   } catch (err) {
     zephyrLog("FAIL: " + (err && err.message), "Fail");
     throw err;
@@ -120,7 +134,7 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
         await driver.focusWindow(WIN);
         await driver.closeWindow();
         await driver.pause(800);
-        await driver.keyPress("Alt", "n"); // "Don't Save" (classic Notepad)
+        await driver.keyPress("Alt", "n");
         await driver.pause(500);
       } catch (closeErr) {
         log("Warning: could not close Notepad cleanly: " + (closeErr && closeErr.message));
