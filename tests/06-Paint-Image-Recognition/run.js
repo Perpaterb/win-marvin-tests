@@ -22,14 +22,14 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
       const from = { x: pl[i][0], y: pl[i][1] };
       const to = { x: pl[i + 1][0], y: pl[i + 1][1] };
       await driver.drag({ from, to });
-      await driver.pause(10);
+      await driver.pause(5);
     }
   }
 
   try {
     log("Launching Paint...");
     await driver.launch("mspaint.exe");
-    await driver.pause(1000);
+    await driver.pause(200);
     await driver.focusWindow(WIN);
     await driver.maximizeWindow(WIN);
     await driver.pause(200);
@@ -48,7 +48,7 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     for (const [name, pl] of PATHS) {
       log("  tracing: " + name + " (" + (pl.length - 1) + " segments)");
       await tracePolyline(pl);
-      await driver.pause(10);
+      await driver.pause(150);
     }
     zephyrLog("Finished drawing Marvin.", "Pass");
 
