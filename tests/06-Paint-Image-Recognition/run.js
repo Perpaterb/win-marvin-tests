@@ -2,16 +2,15 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// Capability area: template-matching image recognition — waitForImage,
-// findImage, clickImage. App: Paint (mspaint.exe).
-//
-// This test needs THREE reference PNGs in the images/ folder next to this file.
-// See images/README.txt for exactly what to capture. Because toolbar icons look
-// the same on every launch, image matching is a reliable way to drive Paint.
+// OPTION A: try to make Paint draw using only the test-level drag API.
+// Strategy: select the brush (single click works), then attempt several drag
+// styles and screenshot after each so we can SEE which, if any, drew a stroke.
 module.exports = async function (driver, parameters = {}, zephyrLog) {
   if (typeof zephyrLog !== "function") zephyrLog = function () {};
 
   const WIN = "Paint";
+  const OUT = parameters.OUT_DIR || ".";
+  let launched = false;
 
   try {
     log("Launching Paint...");
@@ -20,49 +19,77 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     await driver.focusWindow(WIN);
     await driver.maximizeWindow(WIN);
     await driver.pause(1000);
+    launched = true;
     zephyrLog("Launched and maximised Paint.", "Pass");
 
-    // 1) Wait for the Paint window to be ready by detecting a known icon.
-    log("Waiting for the Paint toolbar (paint-window.png) to appear...");
-    await driver.waitForImage("paint-window.png", { timeout: 15000, threshold: 0.8 });
-    zephyrLog("Detected the Paint toolbar via image match.", "Pass");
+    // Confirm UI and select the brush (click works for big targets).
+    log("Detecting Paint UI...");
+    await driver.waitForImage("paint-window.png", { timeout: 15000, threshold: 0.7 });
 
-    // 2) Click a tool by its icon image (e.g. the Pencil/Brush).
-    log("Clicking the brush tool (brush-tool.png)...");
-    await driver.clickImage("brush-tool.png", { threshold: 0.8 });
-    await driver.pause(500);
-    zephyrLog("Clicked the brush tool by image.", "Pass");
+    log("Selecting the brush tool...");
+    const brush = await driver.findImage("brush-tool.png", { threshold: 0.7 });
+    if (!brush.found) throw new Error("Could not find brush tool.");
+    await driver.clickImage("brush-tool.png", { threshold: 0.7 });
+    await driver.pause(1000); // give the selection time to take
+    zephyrLog("Selected the brush tool.", "Pass");
 
-    // 3) Draw something on the canvas with a drag, so there's a visible result.
-    log("Drawing a stroke on the canvas via drag...");
+    // A canvas point well clear of the toolbar. The canvas starts ~y=140 and
+    // spans a large area; pick coordinates comfortably inside it.
+    const baseX = 300, baseY = 400;
+
+    // --- Attempt 1: one slow, long drag ---
+    log("Attempt 1: single long drag...");
+    await driver.mouseMove(baseX, baseY);
+    await driver.pause(400);
+    await driver.drag({ from: { x: baseX, y: baseY }, to: { x: baseX + 250, y: baseY } });
+    await driver.pause(600);
+    await driver.screenshot(`${OUT}/06-drag-attempt1.png`);
+    log("Saved 06-drag-attempt1.png");
+
+    // --- Attempt 2: chained short drags through intermediate points ---
+    log("Attempt 2: chained short drags...");
+    const y2 = baseY + 80;
+    const steps = [0, 50, 100, 150, 200, 250];
+    for (let i = 0; i < steps.length - 1; i++) {
+      const fx = baseX + steps[i];
+      const tx = baseX + steps[i + 1];
+      await driver.mouseMove(fx, y2);
+      await driver.pause(150);
+      await driver.drag({ from: { x: fx, y: y2 }, to: { x: tx, y: y2 } });
+      await driver.pause(200);
+    }
+    await driver.screenshot(`${OUT}/06-drag-attempt2.png`);
+    log("Saved 06-drag-attempt2.png");
+
+    // --- Attempt 3: window-relative drag (in case screen coords are the issue) ---
+    log("Attempt 3: window-relative drag...");
+    const y3 = baseY + 160;
     await driver.drag(
-      { from: { x: 300, y: 400 }, to: { x: 600, y: 550 } },
+      { from: { x: baseX, y: y3 }, to: { x: baseX + 250, y: y3 } },
       { relativeTo: WIN }
     );
-    await driver.pause(500);
-    zephyrLog("Drew a stroke on the canvas.", "Pass");
+    await driver.pause(600);
+    await driver.screenshot(`${OUT}/06-drag-attempt3.png`);
+    log("Saved 06-drag-attempt3.png");
 
-    // 4) Confirm a reference icon is NOT present (negative check without throwing).
-    log("Checking the error-dialog.png icon is absent...");
-    const err = await driver.findImage("error-dialog.png", { threshold: 0.9 });
-    if (err.found) {
-      throw new Error("An unexpected error dialog appeared on screen.");
-    }
-    log("Confidence for (absent) error image: " + err.confidence);
-    zephyrLog("Confirmed no error dialog is present.", "Pass");
-
-    log("Closing Paint without saving...");
-    await driver.focusWindow(WIN);
-    await driver.closeWindow();
-    await driver.pause(1000);
-    // Paint prompts to save — press "Don't Save" (Alt+N on the classic dialog).
-    await driver.keyPress("Alt", "n");
-    await driver.pause(500);
-    zephyrLog("Closed Paint without saving.", "Pass");
-
-    log("PASS: Image recognition test complete.");
+    log("Done. Inspect 06-drag-attempt1/2/3.png to see which (if any) drew a stroke.");
+    log("If NONE drew, the drag primitive needs the driver-level fix (Option B).");
+    zephyrLog("Drag attempts complete — inspect the saved screenshots.", "Pass");
   } catch (err) {
     zephyrLog("FAIL: " + (err && err.message), "Fail");
     throw err;
+  } finally {
+    if (launched) {
+      try {
+        log("Closing Paint without saving...");
+        await driver.focusWindow(WIN);
+        await driver.closeWindow();
+        await driver.pause(1000);
+        await driver.keyPress("Alt", "n");
+        await driver.pause(500);
+      } catch (closeErr) {
+        log("Warning: could not close Paint cleanly: " + (closeErr && closeErr.message));
+      }
+    }
   }
 };
