@@ -2,20 +2,16 @@ function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-// Marvin in colour, using FIXED palette coordinates for colour selection.
+// Marvin in colour, selecting colours by IMAGE MATCH on the swatch images
+// (black.png, green.png, red.png) — same mechanism as the brush tool.
 //
-// Colour swatches are plain filled squares — template matching can't tell them
-// apart (it keys on shape/detail, not colour), so all three matched the same
-// cell. The palette doesn't move, so we click its cells by fixed screen
-// coordinates instead. Brush selection still uses clickImage because the brush
-// icon has real detail and matched at confidence 1.000.
-//
-// Palette cell centers (read from debug-00-launched.png):
-const COLOUR_XY = {
-  black: { x: 764, y: 63 },
-  red:   { x: 829, y: 63 },
-  green: { x: 849, y: 63 },
-};
+// NOTE: plain colour squares are hard for template matching (it keys on
+// shape/detail, not colour). This previously matched all three to the same
+// cell. To catch that fast, colour selection does the find itself and LOGS
+// found/confidence/center for each, so you can see whether the three swatches
+// resolve to genuinely different coordinates. If they cluster at the same x,y
+// again, the crops still aren't distinctive and fixed coordinates is the fix.
+const SWATCH = { black: "black.png", green: "green.png", red: "red.png" };
 
 const PATHS = [
   ["head", "black", [[475, 265], [497, 226], [535, 211], [565, 211], [603, 226], [625, 265], [625, 330], [588, 349], [512, 349], [475, 330], [475, 265]]],
@@ -38,21 +34,32 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
 
   const WIN = "Paint";
   const OUT = parameters.OUT_DIR || ".";
-  // Set VERIFY_SHOTS=true to save a screenshot after each colour click so you
-  // can confirm the right cell was selected.
+  const THRESHOLD = parameters.SWATCH_THRESHOLD != null ? parameters.SWATCH_THRESHOLD : 0.7;
+  // Save a screenshot after each colour click to confirm the right cell.
   const VERIFY_SHOTS = parameters.VERIFY_SHOTS === true;
   let launched = false;
   let currentColour = null;
   let shotN = 0;
 
-  // Select a colour by clicking its fixed palette coordinate. No image match.
+  // Find the swatch, log the match, click its center. Logging is kept so a
+  // repeat of the "all three match the same cell" problem is obvious.
   async function selectColour(colour) {
     if (colour === currentColour) return;
-    const xy = COLOUR_XY[colour];
-    if (!xy) throw new Error("No coordinate mapped for colour: " + colour);
-    log("  colour -> " + colour + " (click " + xy.x + "," + xy.y + ")");
-    await driver.mouseClick(xy.x, xy.y, "left");
+    const swatch = SWATCH[colour];
+    if (!swatch) throw new Error("No swatch image mapped for colour: " + colour);
+
+    const match = await driver.findImage(swatch, { threshold: THRESHOLD });
+    const conf = match.confidence != null ? match.confidence.toFixed(3) : "?";
+    log("  colour -> " + colour + " (" + swatch + "): found=" + match.found +
+        " confidence=" + conf + " center=" + match.centerX + "," + match.centerY);
+    if (!match.found) {
+      throw new Error("swatch not found: " + swatch + " (confidence " + conf +
+        "). Lower SWATCH_THRESHOLD or re-crop with more surrounding detail.");
+    }
+
+    await driver.mouseClick(match.centerX, match.centerY, "left");
     await driver.pause(300);
+
     if (VERIFY_SHOTS) {
       shotN += 1;
       const tag = String(shotN).padStart(2, "0");
@@ -95,7 +102,6 @@ module.exports = async function (driver, parameters = {}, zephyrLog) {
     await driver.pause(1000);
     zephyrLog("Selected the brush tool.", "Pass");
 
-    // Start on black explicitly.
     log("Selecting starting colour (black)...");
     await selectColour("black");
     zephyrLog("Selected starting colour black.", "Pass");
